@@ -1,0 +1,227 @@
+<!DOCTYPE html lang="pt-BR">
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Gravação + Playback</title>
+    <style>
+        body {
+            background: #E1E1E1;
+            text-align: center;
+            font-family: Arial;
+        }
+
+        #record-btn {
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-size: 16px;
+        }
+
+        #vu {
+            width: 200px;
+            height: 120px;
+            margin: 40px auto;
+            border: 2px solid black;
+            position: relative;
+            background: #222;
+        }
+
+        #needle {
+            width: 3px;
+            height: 100px;
+            background: red;
+            position: absolute;
+            left: 50%;
+            bottom: 10px;
+            transform-origin: bottom center;
+            transform: rotate(0deg);
+        }
+    </style>
+</head>
+<body>
+
+<button id="record-btn">Gravar</button>
+
+<div id="vu">
+    <div id="needle"></div>
+</div>
+
+<script>
+{
+    const recBtn = document.getElementById("record-btn");
+    const needle = document.getElementById("needle");
+
+    let audioCtx, analyserNode, dataArray;
+    let recording = false;
+    let isUpdating = false;
+
+    let mediaRecorder;
+    let recordedChunks = [];
+    let micStream;
+
+    let smoothVolume = 0;
+
+    const BASE_VOLUME = 0.3;
+    const NOISE_VOLUME = 0.2;
+    const PLAYBACK_BASE_VOLUME = 0.3;
+
+    const baseAudio = new Audio();
+    const noiseAudio = new Audio("assets/audio/electrical-noise.wav");
+    noiseAudio.loop = true;
+    noiseAudio.volume = NOISE_VOLUME;
+
+    let playbackVoice = null;
+    let playbackBase = null;
+
+    const stopAllPlayback = () => {
+        if (playbackVoice) {
+            playbackVoice.pause();
+            playbackVoice.currentTime = 0;
+            playbackVoice = null;
+        }
+
+        if (playbackBase) {
+            playbackBase.pause();
+            playbackBase.currentTime = 0;
+            playbackBase = null;
+        }
+
+        noiseAudio.pause();
+        noiseAudio.currentTime = 0;
+    };
+
+    const initAudio = async () => {
+        if (audioCtx) return;
+
+        audioCtx = new AudioContext();
+
+        analyserNode = audioCtx.createAnalyser();
+        analyserNode.fftSize = 2048;
+
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const source = audioCtx.createMediaStreamSource(micStream);
+        source.connect(analyserNode);
+
+        dataArray = new Uint8Array(analyserNode.frequencyBinCount);
+    };
+
+    document.body.addEventListener("click", initAudio, { once: true });
+
+    const update = () => {
+        if (!analyserNode || !dataArray) return;
+
+        if (recording) {
+            analyserNode.getByteTimeDomainData(dataArray);
+
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) {
+                const v = (dataArray[i] - 128) / 128;
+                sum += v * v;
+            }
+
+            const rms = Math.sqrt(sum / dataArray.length);
+            smoothVolume = smoothVolume * 0.9 + rms * 0.1;
+        } else {
+            smoothVolume *= 0.9;
+        }
+
+        const vu = Math.log10(1 + smoothVolume * 9);
+        const angle = vu * 90;
+
+        needle.style.transform = `rotate(${angle}deg)`;
+
+        requestAnimationFrame(update);
+    };
+
+    const startRecording = async () => {
+        stopAllPlayback();
+
+        await initAudio();
+
+        if (audioCtx.state === "suspended") {
+            await audioCtx.resume();
+        }
+
+        recordedChunks = [];
+
+        mediaRecorder = new MediaRecorder(micStream);
+
+        mediaRecorder.ondataavailable = e => {
+            if (e.data.size > 0) recordedChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = playback;
+
+        mediaRecorder.start();
+
+        setTimeout(() => {
+            baseAudio.src = "assets/audio/00_voz_como_gravacao_digital.wav";
+            baseAudio.volume = BASE_VOLUME;
+            baseAudio.currentTime = 0;
+
+            const playPromise = baseAudio.play();
+            if (playPromise !== undefined) {
+                playPromise.catch(() => {});
+            }
+
+            baseAudio.onended = stopRecording;
+        }, 150);
+
+        recording = true;
+        recBtn.textContent = "Parar";
+
+        if (!isUpdating) {
+            isUpdating = true;
+            update();
+        }
+    };
+
+    const stopRecording = () => {
+        if (!recording) return;
+
+        recording = false;
+        recBtn.textContent = "Gravar";
+
+        baseAudio.pause();
+        baseAudio.currentTime = 0;
+
+        mediaRecorder.stop();
+    };
+
+    const playback = () => {
+        const blob = new Blob(recordedChunks, { type: "audio/webm" });
+        const voiceURL = URL.createObjectURL(blob);
+
+        playbackVoice = new Audio(voiceURL);
+        playbackBase = new Audio("assets/audio/00_voz_como_gravacao_digital.wav");
+
+        playbackVoice.volume = 1.0;
+        playbackBase.volume = PLAYBACK_BASE_VOLUME;
+        noiseAudio.volume = NOISE_VOLUME;
+
+        playbackVoice.currentTime = 0;
+        playbackBase.currentTime = 0;
+        noiseAudio.currentTime = 0;
+
+        playbackVoice.play();
+        playbackBase.play();
+        noiseAudio.play();
+
+        playbackVoice.onended = () => {
+            stopAllPlayback();
+        };
+    };
+
+    const toggleRecording = () => {
+        if (!recording) {
+            startRecording();
+        } else {
+            stopRecording();
+        }
+    };
+
+    recBtn.addEventListener("click", toggleRecording);
+}
+</script>
+
+</body>
+</html>
