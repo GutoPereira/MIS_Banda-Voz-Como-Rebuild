@@ -4,51 +4,177 @@
     <meta charset="UTF-8">
     <title>Gravação + Playback</title>
     <style>
-        body {
+        * {
+            user-select: none;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            
+            font-family: sans-serif;
+        }
+
+        #recorder {
+            position: relative;
             background: #E1E1E1;
-            text-align: center;
-            font-family: Arial;
+            width: 870px;
+            height: 460px;
         }
 
         #record-btn {
-            margin-top: 20px;
-            padding: 10px 20px;
-            font-size: 16px;
+            appearance: none;
+            border: none;
+            padding: 0px;
+            margin: 0px;
+            display: block;
+            position: absolute;
+            left: 50%;
+            bottom: 0px;
+            transform: translateX(-50%);
+            width: 97px;
+            height: 113px;
+            background: none;
+            background-image: url("/assets/images/gravar.png");
+        }
+
+        #record-btn.playback {
+            touch-action: none;
+            pointer-events: none;
+        }
+
+        #record-btn::before {
+            content: "";
+            display: block;
+            position: absolute;
+            left: 50%;
+            top: 57%;
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+            background-color: red;
+            width: 36px;
+            height: 36px;
+            outline: 4px solid;
+            outline-color: red;
+            outline-offset: 2px;
+        }
+
+        #record-btn.waiting::before {
+            background-color: black;
+            outline-color: black;
+        }
+
+        #record-btn.recording::before {
+            background-color: red;
+            outline-color: red;
+        }
+        
+        #record-btn.playback::before {
+            background-color: green;
+            outline-color: green;
         }
 
         #vu {
-            width: 200px;
-            height: 120px;
-            margin: 40px auto;
-            border: 2px solid black;
-            position: relative;
-            background: #222;
+            width: 237px;
+            height: 112px;
+            position: absolute;
+            right: 0px;
+            bottom: 0px;
+            background-image: url("/assets/images/input.png");
+            overflow: hidden;
         }
 
         #needle {
             width: 3px;
             height: 100px;
-            background: red;
+            background: white;
             position: absolute;
             left: 50%;
-            bottom: 10px;
+            bottom: -10px;
             transform-origin: bottom center;
-            transform: rotate(0deg);
+            transform: rotate(-25deg);
+        }
+
+        #info-box {
+            display: block;
+            position: absolute;
+            top: 0px;
+            left: 0px;
+            width: 870px;
+            height: 315px;
+            background-color: black;
+        }
+
+        #grelha {
+            display: block;
+            position: absolute;
+            width: 236px;
+            height: 112px;
+            left: 0px;
+            bottom: 0px;
+            background-image: url("/assets/images/grelha.png");
+        }
+
+        #credito {
+            display: block;
+            position: absolute;
+            left: 13px;
+            bottom: 13px;
+            color: white;
+            font-size: 10px;
+        }
+
+        #timer {
+            display: flex;
+            position: absolute;
+            height: 30px;
+            width: 70px;
+            left: 825px;
+            top: 280px;
+            font-size: 20px;
+            font-weight: bold;
+            color: white;
+            align-items: center;
+            font-size: 10px;
+        }
+
+        #timer::before {
+            content: "";
+            display: inline-block;
+            position: absolute;
+            top: 50%;
+            left: -15px;
+            transform: translateY(-50%);
+            margin-right: 10px;
+            background-color: green;
+            border-radius: 50%;
+            width: 9px;
+            height: 9px;
         }
     </style>
 </head>
 <body>
 
-<button id="record-btn">Gravar</button>
+<div id="recorder">
+    <div id="info-box">
+        <div id="credito">CARINHOSO</div>
+        <div id="timer"></div>
+    </div>
 
-<div id="vu">
-    <div id="needle"></div>
+    <div id="grelha"></div>
+
+    <button id="record-btn" class="waiting"></button>
+
+    <div id="vu">
+        <div id="needle"></div>
+    </div>
 </div>
 
 <script>
 {
     const recBtn = document.getElementById("record-btn");
     const needle = document.getElementById("needle");
+    const timerEl = document.getElementById("timer");
 
     let audioCtx, analyserNode, dataArray;
     let recording = false;
@@ -60,17 +186,33 @@
 
     let smoothVolume = 0;
 
-    const BASE_VOLUME = 0.3;
-    const NOISE_VOLUME = 0.2;
-    const PLAYBACK_BASE_VOLUME = 0.3;
+    let timerStart = 0;
+    let timerMode = null;
+
+    let recordingStartMs = 0;
+    let recordingDurationMs = 0;
+
+    const CONFIG = {
+        BASE_VOLUME: 0.3,
+        PLAYBACK_BASE_VOLUME: 0.25,
+        NOISE_VOLUME: 0.8,
+        LATENCY_COMPENSATION_MS: 200,
+        START_DELAY_MS: 0
+    };
 
     const baseAudio = new Audio();
     const noiseAudio = new Audio("assets/audio/electrical-noise.wav");
     noiseAudio.loop = true;
-    noiseAudio.volume = NOISE_VOLUME;
 
     let playbackVoice = null;
     let playbackBase = null;
+
+    const formatTime = (ms) => {
+        const totalSec = Math.floor(ms / 1000);
+        const min = String(Math.floor(totalSec / 60)).padStart(2, '0');
+        const sec = String(totalSec % 60).padStart(2, '0');
+        return `${min}:${sec}`;
+    };
 
     const stopAllPlayback = () => {
         if (playbackVoice) {
@@ -87,6 +229,9 @@
 
         noiseAudio.pause();
         noiseAudio.currentTime = 0;
+
+        timerMode = null;
+        timerEl.textContent = "";
     };
 
     const initAudio = async () => {
@@ -125,9 +270,14 @@
         }
 
         const vu = Math.log10(1 + smoothVolume * 9);
-        const angle = vu * 90;
+        const angle = vu * 90 - 25;
 
         needle.style.transform = `rotate(${angle}deg)`;
+
+        if (timerMode) {
+            const elapsed = Date.now() - timerStart;
+            timerEl.textContent = formatTime(elapsed);
+        }
 
         requestAnimationFrame(update);
     };
@@ -153,21 +303,24 @@
 
         mediaRecorder.start();
 
+        recordingStartMs = Date.now();
+        timerStart = Date.now();
+        timerMode = "record";
+
         setTimeout(() => {
             baseAudio.src = "assets/audio/00_voz_como_gravacao_digital.wav";
-            baseAudio.volume = BASE_VOLUME;
+            baseAudio.volume = CONFIG.BASE_VOLUME;
             baseAudio.currentTime = 0;
 
-            const playPromise = baseAudio.play();
-            if (playPromise !== undefined) {
-                playPromise.catch(() => {});
-            }
-
+            baseAudio.play().catch(() => {});
             baseAudio.onended = stopRecording;
-        }, 150);
+        }, CONFIG.START_DELAY_MS);
 
         recording = true;
-        recBtn.textContent = "Parar";
+        recBtn.classList.remove("waiting");
+        recBtn.classList.add("recording");
+
+        console.log("change rec btn class", recBtn.classList)
 
         if (!isUpdating) {
             isUpdating = true;
@@ -179,10 +332,11 @@
         if (!recording) return;
 
         recording = false;
-        recBtn.textContent = "Gravar";
 
         baseAudio.pause();
         baseAudio.currentTime = 0;
+
+        recordingDurationMs = Date.now() - recordingStartMs;
 
         mediaRecorder.stop();
     };
@@ -195,19 +349,49 @@
         playbackBase = new Audio("assets/audio/00_voz_como_gravacao_digital.wav");
 
         playbackVoice.volume = 1.0;
-        playbackBase.volume = PLAYBACK_BASE_VOLUME;
-        noiseAudio.volume = NOISE_VOLUME;
+        playbackBase.volume = CONFIG.PLAYBACK_BASE_VOLUME;
+        noiseAudio.volume = CONFIG.NOISE_VOLUME;
 
         playbackVoice.currentTime = 0;
         playbackBase.currentTime = 0;
         noiseAudio.currentTime = 0;
 
-        playbackVoice.play();
-        playbackBase.play();
-        noiseAudio.play();
+        playbackBase.play().catch(() => {});
+        noiseAudio.play().catch(() => {});
+
+        playbackVoice.onloadedmetadata = () => {
+            const realDurationMs = playbackVoice.duration * 1000;
+
+            let offsetMs = recordingDurationMs - realDurationMs;
+            offsetMs -= CONFIG.LATENCY_COMPENSATION_MS;
+            offsetMs = Math.max(0, offsetMs);
+
+            const offsetSec = offsetMs / 1000;
+            
+            playbackBase.play().catch(() => {});
+            noiseAudio.play().catch(() => {});
+            
+            recBtn.classList.remove("recording");
+            recBtn.classList.add("playback");
+            
+            playbackVoice.play().then(() => {
+                
+                playbackVoice.currentTime = offsetSec;
+                
+                setTimeout(() => {
+                    playbackVoice.currentTime = offsetSec;
+                }, 50);
+            }).catch(() => {});
+
+            timerStart = Date.now();
+            timerMode = "playback";
+        };
 
         playbackVoice.onended = () => {
             stopAllPlayback();
+            
+        recBtn.classList.remove("playback");
+        recBtn.classList.add("waiting");
         };
     };
 
